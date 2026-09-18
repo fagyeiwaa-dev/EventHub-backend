@@ -39,7 +39,7 @@ app.get("/api/events/:id", async (req, res) => {
     }
 });
 
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;
 
 pool.query("SELECT NOW()", (err, result) => {
     if (err) {

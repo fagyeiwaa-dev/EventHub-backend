@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require("cors");
+const bcrypt = require("bcrypt");
 const pool = require("./db");
 
 const app = express();
@@ -8,6 +9,50 @@ app.use(express.json());
 
 app.get("/", (req, res) => {
     res.send("EventHub Backend is running!");
+});
+
+app.post("/api/auth/signup", async (req, res) => {
+    try {
+        const { name, email, password } = req.body;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                error: "Name, email and password are required"
+            });
+        }
+
+        const existingUser = await pool.query(
+            "SELECT id FROM users WHERE email = $1",
+            [email]
+        );
+
+        if (existingUser.rows.length > 0) {
+            return res.status(409).json({
+                error: "Email already exists"
+            });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const result = await pool.query(
+            `INSERT INTO users (name, email, password)
+             VALUES ($1, $2, $3)
+             RETURNING id, name, email, created_at`,
+            [name, email, hashedPassword]
+        );
+
+        res.status(201).json({
+            message: "Account created successfully",
+            user: result.rows[0]
+        });
+
+    } catch (error) {
+        console.error("Error creating user:", error);
+
+        res.status(500).json({
+            error: "Failed to create account"
+        });
+    }
 });
 
 app.get("/api/events", async (req, res) => {
@@ -19,6 +64,7 @@ app.get("/api/events", async (req, res) => {
         res.status(500).json({ error: "Failed to fetch events" });
     }
 });
+
 app.get("/api/events/:id", async (req, res) => {
     try {
         const { id } = req.params;
@@ -71,12 +117,15 @@ app.post("/api/registrations", async (req, res) => {
     try {
         const { event_id, name, email, quantity, total } = req.body;
 
+        // Generate a unique ticket number
+       const ticketNumber = `EVH-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+
         const result = await pool.query(
             `INSERT INTO registrations
-            (event_id, name, email, quantity, total)
-            VALUES ($1, $2, $3, $4, $5)
+            (event_id, name, email, quantity, total, ticket_number)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *`,
-            [event_id, name, email, quantity, total]
+            [event_id, name, email, quantity, total, ticketNumber]
         );
 
         res.status(201).json(result.rows[0]);
@@ -85,6 +134,7 @@ app.post("/api/registrations", async (req, res) => {
         res.status(500).json({ error: "Failed to create registration" });
     }
 });
+
 app.get("/api/registrations", async (req, res) => {
     try {
         const result = await pool.query(`
@@ -95,6 +145,7 @@ app.get("/api/registrations", async (req, res) => {
                 registrations.email,
                 registrations.quantity,
                 registrations.total,
+                registrations.ticket_number,
                 registrations.created_at,
                 events.title AS event_title,
                 events.date,

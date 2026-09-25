@@ -2,10 +2,20 @@ const express = require('express');
 const cors = require("cors");
 const bcrypt = require("bcrypt");
 const pool = require("./db");
-const { Resend } = require("resend");
+const nodemailer = require("nodemailer");
+
+const transporter = nodemailer.createTransport({
+    host: process.env.BREVO_SMTP_HOST,
+    port: Number(process.env.BREVO_SMTP_PORT),
+    secure: false,
+    auth: {
+        user: process.env.BREVO_SMTP_USER,
+        pass: process.env.BREVO_SMTP_PASS
+    }
+});
 
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -144,10 +154,11 @@ const event = eventResult.rows[0];
             [event_id, name, email, quantity, total, ticketNumber]
         );
         
-        const { data, error } = await resend.emails.send({
-    from: "EventHub <onboarding@resend.dev>",
-    to: [email],
-    subject: `Your EventHub ticket - ${event.title}`,
+       try {
+    await transporter.sendMail({
+        from: `"${process.env.BREVO_SENDER_NAME}" <${process.env.BREVO_SENDER_EMAIL}>`,
+        to: email,
+        subject: `Your EventHub ticket - ${event.title}`,
 
 html: `
     <div style="margin:0; padding:0; background-color:#f8f1e8; font-family:Arial, Helvetica, sans-serif; color:#333333;">
@@ -281,11 +292,11 @@ html: `
     </div>
 `
         });
-
-        if (error) {
-    console.error("Error sending confirmation email:", error);
+} catch (emailError) {
+    console.error("Error sending confirmation email:", emailError);
 }
-res.status(201).json(result.rows[0]);
+
+    res.status(201).json(result.rows[0]);
 
     } catch (error) {
         console.error("Error creating registration:", error);

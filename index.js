@@ -3,6 +3,9 @@ const cors = require("cors");
 const bcrypt = require("bcrypt");
 const pool = require("./db");
 const nodemailer = require("nodemailer");
+const jwt = require("jsonwebtoken");
+require("dotenv").config(); 
+
 
 const transporter = nodemailer.createTransport({
     host: process.env.BREVO_SMTP_HOST,
@@ -19,6 +22,42 @@ const transporter = nodemailer.createTransport({
 const app = express();
 app.use(cors());
 app.use(express.json());
+const authenticateToken = (req, res, next) => {
+    const authHeader = req.headers.authorization;
+
+    const token = authHeader && authHeader.split(" ")[1];
+
+    if (!token) {
+        return res.status(401).json({
+            error: "Access token required"
+        });
+    }
+
+    try {
+        const decoded = jwt.verify(
+            token,
+            process.env.JWT_SECRET
+        );
+
+        req.user = decoded;
+
+        next();
+    } catch (error) {
+        return res.status(403).json({
+            error: "Invalid or expired token"
+        });
+    }
+};
+
+const requireAdmin = (req, res, next) => {
+    if (!req.user.is_admin) {
+        return res.status(403).json({
+            error: "Admin access required"
+        });
+    }
+
+    next();
+};
 
 app.get("/", (req, res) => {
     res.send("EventHub Backend is running!");
@@ -44,7 +83,6 @@ app.post("/api/auth/signup", async (req, res) => {
                 error: "Email already exists"
             });
         }
-
         const hashedPassword = await bcrypt.hash(password, 10);
 
         const result = await pool.query(
@@ -64,6 +102,67 @@ app.post("/api/auth/signup", async (req, res) => {
 
         res.status(500).json({
             error: "Failed to create account"
+        });
+    }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                error: "Email and password are required"
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT id, name, email, password, is_admin
+             FROM users
+             WHERE email = $1`,
+            [email]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({
+                error: "Invalid email or password"
+            });
+        }
+        const user = result.rows[0];
+
+        const passwordMatch = await bcrypt.compare(
+            password,
+            user.password
+        );
+
+        if (!passwordMatch) {
+            return res.status(401).json({
+                error: "Invalid email or password"
+            });
+        }
+
+        const token = jwt.sign(
+            { id: user.id, email: user.email, is_admin: user.is_admin },
+            process.env.JWT_SECRET,
+            { expiresIn: "1d" }
+        );
+
+        res.json({
+    message: "Login successful",
+    token,
+    user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        is_admin: user.is_admin
+    }
+});
+
+    } catch (error) {
+        console.error("Error logging in:", error);
+
+        res.status(500).json({
+            error: "Failed to login"
         });
     }
 });
@@ -329,6 +428,42 @@ app.get("/api/registrations", async (req, res) => {
     } catch (error) {
         console.error("Error fetching registrations:", error);
         res.status(500).json({ error: "Failed to fetch registrations" });
+    }
+});
+
+app.get(
+    "/api/admin/registrations",
+    authenticateToken,
+    requireAdmin,
+    async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT
+                registrations.id,
+                registrations.event_id,
+                registrations.name,
+                registrations.email,
+                registrations.quantity,
+                registrations.total,
+                registrations.ticket_number,
+                registrations.created_at,
+                events.title AS event_title,
+                events.date,
+                events.location
+            FROM registrations
+            JOIN events
+                ON registrations.event_id = events.id
+            ORDER BY registrations.created_at DESC
+        `);
+
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error("Error fetching admin registrations:", error);
+
+        res.status(500).json({
+            error: "Failed to fetch registrations"
+        });
     }
 });
 
